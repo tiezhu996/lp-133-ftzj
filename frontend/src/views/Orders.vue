@@ -7,6 +7,7 @@
         <el-tabs v-model="activeTab" @tab-change="fetchOrders">
           <el-tab-pane label="进行中" name="in_progress" />
           <el-tab-pane label="已完成" name="completed" />
+          <el-tab-pane label="已取消" name="cancelled" />
           <el-tab-pane label="全部" name="" />
         </el-tabs>
       </el-card>
@@ -31,8 +32,9 @@
                 </el-tag>
                 <el-tag v-if="order.status === 'in_progress'" type="warning" class="ml-2" size="small">进行中</el-tag>
                 <el-tag v-else-if="order.status === 'completed'" type="success" class="ml-2" size="small">已完成</el-tag>
+                <el-tag v-else-if="order.status === 'cancelled'" type="danger" class="ml-2" size="small">已取消</el-tag>
               </div>
-              
+
               <div class="text-gray-600 text-sm mb-3">
                 <p v-if="user?.role === 'volunteer'">
                   <el-icon class="mr-1"><User /></el-icon>
@@ -46,36 +48,65 @@
                   <el-icon class="mr-1"><Location /></el-icon>
                   {{ order.address }}
                 </p>
+                <p v-if="order.expected_time" class="mt-1">
+                  <el-icon class="mr-1"><Calendar /></el-icon>
+                  预约时间：{{ new Date(order.expected_time).toLocaleString() }}
+                </p>
                 <p v-if="order.service_hours" class="mt-1">
                   <el-icon class="mr-1"><Clock /></el-icon>
                   服务时长：{{ order.service_hours }} 小时
                 </p>
+                <div
+                  v-if="order.status === 'cancelled' && order.cancel_reason"
+                  class="mt-2 p-2 bg-red-50 rounded text-xs text-red-600 leading-relaxed"
+                >
+                  <p>
+                    <el-icon class="mr-1"><CircleClose /></el-icon>
+                    取消人：{{ order.cancelled_by_name || '未知用户' }}
+                    <span class="ml-1 text-gray-400">
+                      ({{ order.cancelled_by === user?.id ? '我' : cancelRole(order) }})
+                    </span>
+                  </p>
+                  <p class="mt-1">取消原因：{{ order.cancel_reason }}</p>
+                  <p v-if="order.cancelled_at" class="mt-1">
+                    取消时间：{{ new Date(order.cancelled_at).toLocaleString() }}
+                  </p>
+                </div>
               </div>
-              
+
               <div class="text-xs text-gray-400">
                 下单时间：{{ new Date(order.created_at).toLocaleString() }}
               </div>
             </div>
-            
+
             <div class="flex flex-col gap-2">
-              <el-button 
-                v-if="order.status === 'in_progress'" 
-                type="primary" 
+              <el-button
+                v-if="order.status === 'in_progress'"
+                type="primary"
                 size="small"
                 @click="handleComplete(order)"
               >
                 完成服务
               </el-button>
-              <el-button 
-                v-if="order.status === 'completed' && !hasReviewed(order.id)" 
-                type="success" 
+              <el-button
+                v-if="order.status === 'in_progress'"
+                type="danger"
+                size="small"
+                :loading="cancellingId === order.id"
+                @click="handleCancel(order)"
+              >
+                {{ user?.role === 'volunteer' ? '撤回接单' : '取消订单' }}
+              </el-button>
+              <el-button
+                v-if="order.status === 'completed' && !hasReviewed(order.id)"
+                type="success"
                 size="small"
                 @click="showReviewDialog(order)"
               >
                 去评价
               </el-button>
-              <el-button 
-                type="text" 
+              <el-button
+                type="text"
                 size="small"
                 @click="handleMessage(order)"
               >
@@ -121,6 +152,7 @@ const loading = ref(false)
 const activeTab = ref('in_progress')
 const reviewDialogVisible = ref(false)
 const submittingReview = ref(false)
+const cancellingId = ref(null)
 const currentOrder = ref(null)
 const reviewedOrders = ref([])
 
@@ -142,6 +174,13 @@ const getTypeColor = (type) => typeMap[type]?.color || 'info'
 
 const hasReviewed = (orderId) => reviewedOrders.value.includes(orderId)
 
+// 取消人是当前订单的志愿者还是居民（排除“我”本人的情况）
+const cancelRole = (order) => {
+  if (order.cancelled_by === order.volunteer_id) return '志愿者撤回'
+  if (order.cancelled_by === order.user_id) return '居民取消'
+  return ''
+}
+
 const fetchOrders = async () => {
   loading.value = true
   try {
@@ -160,7 +199,7 @@ const handleComplete = async (order) => {
       cancelButtonText: '取消',
       type: 'info'
     })
-    
+
     await api.put(`/orders/${order.id}/complete`, { service_hours: 1 })
     ElMessage.success('服务已完成')
     fetchOrders()
@@ -169,6 +208,36 @@ const handleComplete = async (order) => {
     if (e !== 'cancel') {
       ElMessage.error(e.response?.data?.message || '操作失败')
     }
+  }
+}
+
+const handleCancel = async (order) => {
+  const isVolunteer = user.value.role === 'volunteer'
+  try {
+    const { value } = await ElMessageBox.prompt(
+      isVolunteer
+        ? '撤回后需求将重新开放给其他志愿者接单，请填写撤回原因。'
+        : '取消后需求将重新开放，其他志愿者可重新接单，请填写取消原因。',
+      isVolunteer ? '撤回接单' : '取消订单',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '再想想',
+        inputType: 'textarea',
+        inputPlaceholder: '请填写取消原因（必填）',
+        inputValidator: (val) => (val && val.trim() ? true : '取消原因不能为空')
+      }
+    )
+
+    cancellingId.value = order.id
+    await api.post(`/orders/${order.id}/cancel`, { reason: value.trim() })
+    ElMessage.success(isVolunteer ? '已撤回接单' : '订单已取消')
+    fetchOrders()
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.response?.data?.message || '取消失败')
+    }
+  } finally {
+    cancellingId.value = null
   }
 }
 

@@ -3,10 +3,15 @@
     <div class="container mx-auto px-4 py-6">
       <div class="flex items-center justify-between mb-6">
         <h1 class="text-2xl font-bold text-gray-800">需求广场</h1>
-        <el-button type="primary" v-if="user?.role === 'resident'" @click="$router.push('/publish')">
-          <el-icon class="mr-1"><Plus /></el-icon>
-          发布需求
-        </el-button>
+        <div class="flex items-center gap-3">
+          <el-button circle @click="fetchNeeds" :loading="loading">
+            <el-icon><Refresh /></el-icon>
+          </el-button>
+          <el-button type="primary" v-if="user?.role === 'resident'" @click="$router.push('/publish')">
+            <el-icon class="mr-1"><Plus /></el-icon>
+            发布需求
+          </el-button>
+        </div>
       </div>
       
       <el-card class="mb-6 shadow-sm">
