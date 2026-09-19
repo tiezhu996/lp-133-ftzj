@@ -78,16 +78,36 @@ const initData = async () => {
         service_hours DECIMAL(8, 2) DEFAULT 0,
         start_time DATETIME,
         end_time DATETIME,
+        cancelled_by INT,
+        cancel_reason VARCHAR(500),
+        cancelled_at DATETIME,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         FOREIGN KEY (need_id) REFERENCES needs(id),
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (volunteer_id) REFERENCES users(id),
+        FOREIGN KEY (cancelled_by) REFERENCES users(id),
         INDEX idx_status (status),
         INDEX idx_user_id (user_id),
-        INDEX idx_volunteer_id (volunteer_id)
+        INDEX idx_volunteer_id (volunteer_id),
+        INDEX idx_cancelled_by (cancelled_by)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+
+    // 兼容已存在的旧订单表：补齐取消/开始服务闭环所需字段
+    const [orderColumns] = await pool.query('SHOW COLUMNS FROM orders');
+    const orderColumnNames = orderColumns.map((col) => col.Field);
+    const orderColumnDefs = {
+      start_time: 'ADD COLUMN start_time DATETIME COMMENT \'开始服务时间\'',
+      cancelled_by: 'ADD COLUMN cancelled_by INT COMMENT \'取消人ID\'',
+      cancel_reason: 'ADD COLUMN cancel_reason VARCHAR(500) COMMENT \'取消原因\'',
+      cancelled_at: 'ADD COLUMN cancelled_at DATETIME COMMENT \'取消时间\'',
+    };
+    for (const [column, definition] of Object.entries(orderColumnDefs)) {
+      if (!orderColumnNames.includes(column)) {
+        await pool.query(`ALTER TABLE orders ${definition}`);
+      }
+    }
     console.log('✅ 订单表创建完成');
 
     // 创建评价表

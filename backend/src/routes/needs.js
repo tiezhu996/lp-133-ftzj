@@ -96,31 +96,56 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 router.post('/:id/accept', authenticateToken, asyncHandler(async (req, res) => {
   const needId = req.params.id;
-  const [needs] = await pool.query('SELECT * FROM needs WHERE id = ?', [needId]);
 
-  if (needs.length === 0) {
-    return res.status(404).json({ message: messages.needs.notFound });
+  // 事务 + 行锁，保证并发接单只有一次生效，失败不产生脏订单
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [needs] = await conn.query(
+      'SELECT * FROM needs WHERE id = ? FOR UPDATE',
+      [needId],
+    );
+
+    if (needs.length === 0) {
+      await conn.rollback();
+      return res.status(404).json({ message: messages.needs.notFound });
+    }
+
+    if (needs[0].status !== 'pending') {
+      await conn.rollback();
+      return res.status(400).json({ message: messages.needs.alreadyAccepted });
+    }
+
+    if (needs[0].user_id === req.user.id) {
+      await conn.rollback();
+      return res.status(400).json({ message: messages.needs.cannotAcceptOwnNeed });
+    }
+
+    // 条件更新兜底：行锁释放后仍须处于待接单，affectedRows 为 0 说明已被别人抢走
+    const [updateResult] = await conn.query(
+      "UPDATE needs SET status = 'accepted', volunteer_id = ? WHERE id = ? AND status = 'pending'",
+      [req.user.id, needId],
+    );
+
+    if (updateResult.affectedRows === 0) {
+      await conn.rollback();
+      return res.status(400).json({ message: messages.needs.alreadyAccepted });
+    }
+
+    await conn.query(
+      "INSERT INTO orders (need_id, user_id, volunteer_id, status) VALUES (?, ?, ?, 'in_progress')",
+      [needId, needs[0].user_id, req.user.id],
+    );
+
+    await conn.commit();
+    res.json({ message: messages.needs.accepted });
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
   }
-
-  if (needs[0].status !== 'pending') {
-    return res.status(400).json({ message: messages.needs.alreadyAccepted });
-  }
-
-  if (needs[0].user_id === req.user.id) {
-    return res.status(400).json({ message: messages.needs.cannotAcceptOwnNeed });
-  }
-
-  await pool.query(
-    "UPDATE needs SET status = 'accepted', volunteer_id = ? WHERE id = ?",
-    [req.user.id, needId],
-  );
-
-  await pool.query(
-    "INSERT INTO orders (need_id, user_id, volunteer_id, status) VALUES (?, ?, ?, 'in_progress')",
-    [needId, needs[0].user_id, req.user.id],
-  );
-
-  res.json({ message: messages.needs.accepted });
 }));
 
 module.exports = router;

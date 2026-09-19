@@ -62,16 +62,21 @@ CREATE TABLE IF NOT EXISTS orders (
   volunteer_id INT NOT NULL COMMENT '志愿者ID',
   status ENUM('in_progress', 'completed', 'cancelled') DEFAULT 'in_progress' COMMENT '状态',
   service_hours DECIMAL(8, 2) DEFAULT 0 COMMENT '服务时长(小时)',
-  start_time DATETIME COMMENT '开始时间',
+  start_time DATETIME COMMENT '开始服务时间，有值表示已开始，不可再取消',
   end_time DATETIME COMMENT '结束时间',
+  cancelled_by INT COMMENT '取消人ID(志愿者撤回或居民取消)',
+  cancel_reason VARCHAR(500) COMMENT '取消原因',
+  cancelled_at DATETIME COMMENT '取消时间',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (need_id) REFERENCES needs(id),
   FOREIGN KEY (user_id) REFERENCES users(id),
   FOREIGN KEY (volunteer_id) REFERENCES users(id),
+  FOREIGN KEY (cancelled_by) REFERENCES users(id),
   INDEX idx_status (status),
   INDEX idx_user_id (user_id),
-  INDEX idx_volunteer_id (volunteer_id)
+  INDEX idx_volunteer_id (volunteer_id),
+  INDEX idx_cancelled_by (cancelled_by)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单表';
 
 -- 评价表
